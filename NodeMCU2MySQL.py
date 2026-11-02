@@ -1,14 +1,42 @@
+#cd FILE_LOCATION
+#$env:DB_PASS = "DB_PASSWORD"
+#python NodeMCU2MySQL.py
+
 from flask import Flask, abort, jsonify, request
 from decimal import Decimal
+from werkzeug.exceptions import HTTPException
 import pymysql
 import hashlib
+import os
+import re
 
 app = Flask(__name__) #Creates a Flask object
 
 TARIFA = Decimal("15.00")
 
 def conectar():
-    return pymysql.connect(host="localhost", user="root", password="NuevaPass123", database="validador", cursorclass=pymysql.cursors.DictCursor) #Open a connection to MySQL
+    return pymysql.connect(host="localhost", user="root", password=os.environ.get("DB_PASS", ""), database="validador", cursorclass=pymysql.cursors.DictCursor) #Open a connection to MySQL
+
+@app.errorhandler(HTTPException)
+def error_http(e):
+    return jsonify(error=e.description), e.code #Returns error message and code
+
+@app.errorhandler(Exception)
+def error_interno(e):
+    app.logger.exception("error interno") #Prints full traceback
+    return jsonify(error="error interno"), 500  #Prints generic error message
+
+def cuerpo_json():
+    cuerpo = request.get_json(silent=True) #Reads and converts JSON
+    if not isinstance(cuerpo, dict): #If not a valid JSON, return None
+        abort(400, "se esperaba un objeto JSON") 
+    return cuerpo #If the body passed, the route gets the dictionary
+
+def leer_uid(cuerpo): #Receives the body dictionary
+    uid = cuerpo.get("uid") #Returns the value
+    if not (isinstance(uid, str) and re.fullmatch(r"[0-9A-Fa-f]{2,20}", uid)): #The UID must be a hexadecimal 8 chars long
+        abort(400, "uid debe ser hxadecimal de 2 a 20 caracteres")
+    return uid.upper() #Returns the UID in uppercase
 
 def autenticar(*tipos_permitidos): 
     llave = request.headers.get("X-API-Key", "") #Holds the request's headers
@@ -31,13 +59,14 @@ def autenticar(*tipos_permitidos):
 @app.post("/api/validador/consulta") #Called when NodeMCU sends a POST request
 def consulta():
     autenticar("validador")
-    uid = request.get_json()["uid"].upper() #Reads an uid and returns a dictionary
+    uid = leer_uid(cuerpo_json()) #Reads an uid and returns a dictionary
     con = conectar() #Stores the connection
-    with con.cursor() as c: #Creates a SQL cursor and reads the result
-        c.execute("SELECT saldo, estado FROM tarjetas WHERE uid_rfid = %s", (uid,)) #Sends the query
-        tarjeta = c.fetchone() #Returns the first row as a dictionary
-    con.close() #Close conenction to MySQL
-
+    try:
+        with con.cursor() as c: #Creates a SQL cursor and reads the result
+            c.execute("SELECT saldo, estado FROM tarjetas WHERE uid_rfid = %s", (uid,)) #Sends the query
+            tarjeta = c.fetchone() #Returns the first row as a dictionary
+    finally:
+        con.close() #Close conenction to MySQL
     if tarjeta is None: #Checks if card is on the query
         return jsonify(valida=False, motivo="No registrada")
     if tarjeta["estado"] != "activa": #Checks if card is not blocked
@@ -47,7 +76,7 @@ def consulta():
 @app.post("/api/validador/cobro")
 def cobro():
     dispositivo = autenticar("validador")
-    uid = request.get_json()["uid"].upper()
+    uid = leer_uid(cuerpo_json())
     id_dispositivo = dispositivo["id"]
     con = conectar()
     try:
@@ -82,10 +111,18 @@ def cobro():
 @app.post("/api/sensores")
 def sensores():
     dispositivo = autenticar("validador", "termico") #Only "validador" and "termico" devices are allowed to call
-    datos = request.get_json() #Read json data
-    tipo = datos["tipo"]
-    valor = datos["valor"]
-    if tipo == "pir" and dispositivo["tipo_dispositivo"] != "validador": #Each device can only send its own sensor
+    datos = cuerpo_json #Read json data
+    tipo = datos.get("tipo")
+    valor = datos.get("valor")
+    if tipo == "pir": #PIR only sends 0 or 1
+        maximo = 1    
+    if tipo == "ldr": #Analog read from 0 to 1023
+        maximo = 1023
+    else:
+        abort(400, "tipo debe ser pir o ldr") #Not PIR or LDR, then rejected
+    if not (type(valor) is int and 0 <= valor <= maximo):
+        abort(400, f"valor debe ser un entero entre 0 y {maximo}")
+    if tipo == "pir" and dispositivo["tipo_dispositivo"] != "validador":
         abort(403, "solo el validador envia pir")
     if tipo == "ldr" and dispositivo["tipo_dispositivo"] != "termico":
         abort(403, "solo el nodo termico envia ldr")
@@ -101,16 +138,27 @@ def sensores():
 @app.post("/api/temperatura")
 def temperatura():
     dispositivo = autenticar("termico") #Only "termico" devices are allowed to call
-    datos = request.get_json() #Read json data
+    datos = cuerpo_json() #Read json data
+    
+    t = datos.get("temperatura")
+    h = datos.get("humedad")
+    v = datos.get("ventilador_encendido")
+    if not (type(t) in (int, float) and -40 <= t <= 80):
+        abort(400, "temperatura debe estar entre -40 y 80")
+    if not (type(h) in (int, float) and 0 <= h <= 100):
+        abort(400, "humedad debe estar entre 0 y 100")
+        if type(v) is not bool:
+            abort(400, "ventilador_encendido debe ser true o false")
+    
     con = conectar()
     try:
         with con.cursor() as c:
-            c.execute("INSERT INTO temperatura (id_dispositivo, temperatura, humedad, ventilador_encendido) ""VALUES (%s, %s, %s, %s)", (dispositivo["id"], datos["temperatura"], datos["humedad"], datos["ventilador_encendido"]),) #Sends SQL instruction
+            c.execute("INSERT INTO temperatura (id_dispositivo, temperatura, humedad, ventilador_encendido) ""VALUES (%s, %s, %s, %s)", (dispositivo["id"], t, h, v)) #Sends SQL instruction
         con.commit() #Saves the row
     finally:
         con.close() #Close connection
     return jsonify(ok=True), 201 
 
-if __name__ == "__main__": #Start server only if the file was run directly
-    app.run(host="0.0.0.0", port=5000, debug=True) #Waits for requests forever
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
 
