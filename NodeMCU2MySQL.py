@@ -28,14 +28,14 @@ def error_interno(e):
 
 def cuerpo_json():
     cuerpo = request.get_json(silent=True) #Reads and converts JSON
-    if not isinstance(cuerpo, dict): #If not a valid JSON, return None
+    if not isinstance(cuerpo, dict): #Rejects if not a valid JSON
         abort(400, "se esperaba un objeto JSON") 
     return cuerpo #If the body passed, the route gets the dictionary
 
 def leer_uid(cuerpo): #Receives the body dictionary
     uid = cuerpo.get("uid") #Returns the value
-    if not (isinstance(uid, str) and re.fullmatch(r"[0-9A-Fa-f]{2,20}", uid)): #The UID must be a hexadecimal 8 chars long
-        abort(400, "uid debe ser hxadecimal de 2 a 20 caracteres")
+    if not (isinstance(uid, str) and re.fullmatch(r"[0-9A-Fa-f]{2,20}", uid)): #The UID must be a hexadecimal 2-20 chars long
+        abort(400, "uid debe ser hexadecimal de 2 a 20 caracteres")
     return uid.upper() #Returns the UID in uppercase
 
 def autenticar(*tipos_permitidos): 
@@ -111,12 +111,12 @@ def cobro():
 @app.post("/api/sensores")
 def sensores():
     dispositivo = autenticar("validador", "termico") #Only "validador" and "termico" devices are allowed to call
-    datos = cuerpo_json #Read json data
+    datos = cuerpo_json() #Read json data
     tipo = datos.get("tipo")
     valor = datos.get("valor")
     if tipo == "pir": #PIR only sends 0 or 1
         maximo = 1    
-    if tipo == "ldr": #Analog read from 0 to 1023
+    elif tipo == "ldr": #Analog read from 0 to 1023
         maximo = 1023
     else:
         abort(400, "tipo debe ser pir o ldr") #Not PIR or LDR, then rejected
@@ -147,8 +147,8 @@ def temperatura():
         abort(400, "temperatura debe estar entre -40 y 80")
     if not (type(h) in (int, float) and 0 <= h <= 100):
         abort(400, "humedad debe estar entre 0 y 100")
-        if type(v) is not bool:
-            abort(400, "ventilador_encendido debe ser true o false")
+    if type(v) is not bool:
+        abort(400, "ventilador_encendido debe ser true o false")
     
     con = conectar()
     try:
