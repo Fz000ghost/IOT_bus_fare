@@ -10,28 +10,23 @@ TARIFA = Decimal("15.00")
 def conectar():
     return pymysql.connect(host="localhost", user="root", password="NuevaPass123", database="validador", cursorclass=pymysql.cursors.DictCursor) #Open a connection to MySQL
 
-def autenticar(*tipos_permitidos):
-    llave = request.headers.get("X-API-Key", "")
-    hash_llave = hashlib.sha256(llave.encode()).hexdigest()
+def autenticar(*tipos_permitidos): 
+    llave = request.headers.get("X-API-Key", "") #Holds the request's headers
+    hash_llave = hashlib.sha256(llave.encode()).hexdigest() #Computes the SHA-256 of the key
     con = conectar()
     try:
         with con.cursor() as c:
-            c.execute("SELECT id, tipo_dispositivo FROM dispositivos WHERE api_key_hash = %s", (hash_llave,))
+            c.execute("SELECT id, tipo_dispositivo FROM dispositivos WHERE api_key_hash = %s", (hash_llave,)) #Looks for a device with the given hash
             dispositivo = c.fetchone()
             if dispositivo is None:
                 abort(401, "api_key invalida")
-            if dispositivo["tipo_dispositivo"] not in tipos_permitidos:
+            if dispositivo["tipo_dispositivo"] not in tipos_permitidos: 
                 abort(403, "dispositivo no autorizado")
-
-            c.execute("UPDATE dispositivos SET ultima_conexion = NOW() WHERE id = %s", (dispositivo["id"],))
-        con.commit()
+            c.execute("UPDATE dispositivos SET ultima_conexion = NOW() WHERE id = %s", (dispositivo["id"],)) #Record the current time for the device that just connected
+        con.commit() #Saves record
     finally:
-        con.close()
-    return dispositivo
-
-@app.get("/hi") #Test function to return a JSON message that answers request /hi
-def hola():
-    return jsonify(mensaje="hii")
+        con.close() #Close connection
+    return dispositivo #Get the device's row back
 
 @app.post("/api/validador/consulta") #Called when NodeMCU sends a POST request
 def consulta():
@@ -39,15 +34,15 @@ def consulta():
     uid = request.get_json()["uid"].upper() #Reads an uid and returns a dictionary
     con = conectar() #Stores the connection
     with con.cursor() as c: #Creates a SQL cursor and reads the result
-        c.execute("SELECT saldo, FROM tarjetas WHERE uid_rfid = %s", (uid,)) #Sends the query
+        c.execute("SELECT saldo, estado FROM tarjetas WHERE uid_rfid = %s", (uid,)) #Sends the query
         tarjeta = c.fetchone() #Returns the first row as a dictionary
     con.close() #Close conenction to MySQL
 
     if tarjeta is None: #Checks if card is on the query
         return jsonify(valida=False, motivo="No registrada")
-    if tarjeta ["estado"] != "activa": #Checks if card is not blocked
+    if tarjeta["estado"] != "activa": #Checks if card is not blocked
         return jsonify(valida=False, motivo="Bloqueada")
-    return jsonify(valida=True, saldo=float(tarjeta["Saldo"]), tarifa=float(TARIFA)) #else return the card's data
+    return jsonify(valida=True, saldo=float(tarjeta["saldo"]), tarifa=float(TARIFA)) #else return the card's data
 
 @app.post("/api/validador/cobro")
 def cobro():
@@ -74,7 +69,7 @@ def cobro():
                     resultado = "exitoso"
                     saldo = saldo - TARIFA
                     c.execute("UPDATE tarjetas SET saldo = %s WHERE id = %s", (saldo, id_tarjeta))
-            c.execute("INSERT INTO transacciones (id_tarjeta, id_dispositivo, monto, resultado, saldo_resultante)" "VALUES (%s, %s, %s, %s, %s)", (id_tarjeta, id_dispositivo, TARIFA, resultado, saldo),) #Save all results, including rejected ones on one row
+            c.execute("INSERT INTO transacciones (id_tarjeta, id_dispositivo, monto, resultado, saldo_resultante) ""VALUES (%s, %s, %s, %s, %s)", (id_tarjeta, id_dispositivo, TARIFA, resultado, saldo),) #Save all results, including rejected ones on one row
         con.commit() #Saves the transaction
     except Exception:
         con.rollback() #Undoes everything
@@ -83,6 +78,38 @@ def cobro():
         con.close() #Close connection
     saldo_json = 0.0 if saldo is None else float(saldo) #Prepares the balance for the response
     return jsonify(resultado=resultado, saldo=saldo_json, tarifa=float(TARIFA)) #Sends the response to the NodeMCU
+
+@app.post("/api/sensores")
+def sensores():
+    dispositivo = autenticar("validador", "termico") #Only "validador" and "termico" devices are allowed to call
+    datos = request.get_json() #Read json data
+    tipo = datos["tipo"]
+    valor = datos["valor"]
+    if tipo == "pir" and dispositivo["tipo_dispositivo"] != "validador": #Each device can only send its own sensor
+        abort(403, "solo el validador envia pir")
+    if tipo == "ldr" and dispositivo["tipo_dispositivo"] != "termico":
+        abort(403, "solo el nodo termico envia ldr")
+    con = conectar()
+    try:
+        with con.cursor() as c:
+            c.execute("INSERT INTO sensores (id_dispositivo, tipo, valor) VALUES (%s, %s, %s)", (dispositivo["id"], tipo, valor),) #Sends SQL instruction
+        con.commit() #Saves the row
+    finally:
+        con.close() #Close connection
+    return jsonify(ok=True), 201
+
+@app.post("/api/temperatura")
+def temperatura():
+    dispositivo = autenticar("termico") #Only "termico" devices are allowed to call
+    datos = request.get_json() #Read json data
+    con = conectar()
+    try:
+        with con.cursor() as c:
+            c.execute("INSERT INTO temperatura (id_dispositivo, temperatura, humedad, ventilador_encendido) ""VALUES (%s, %s, %s, %s)", (dispositivo["id"], datos["temperatura"], datos["humedad"], datos["ventilador_encendido"]),) #Sends SQL instruction
+        con.commit() #Saves the row
+    finally:
+        con.close() #Close connection
+    return jsonify(ok=True), 201 
 
 if __name__ == "__main__": #Start server only if the file was run directly
     app.run(host="0.0.0.0", port=5000, debug=True) #Waits for requests forever
