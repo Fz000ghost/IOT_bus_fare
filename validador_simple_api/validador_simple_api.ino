@@ -8,7 +8,7 @@
 #include <ArduinoJson.h>
 
 // Red y API (CAMBIAR)
-const char* WIFI_SSID = "WIFINAME";            // red de 2.4 GHz
+const char* WIFI_SSID = "Tec-IoT";            // red de 2.4 GHz
 const char* WIFI_PASS = "WIFIPASS";
 const char* API_BASE  = "http://0.0.0.0:5000";   // IP de la laptop que corre app.py
 const char* API_KEY   = "validador-unidad-01";         // debe existir en la tabla dispositivos

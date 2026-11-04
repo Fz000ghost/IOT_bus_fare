@@ -1,7 +1,3 @@
--- Esquema del validador de tarifa (Fase 0, Grupo 504).
--- Se importa dentro de una base ya creada:  mysql -u root -p validador < schema.sql
--- No tiene DROP: si se vuelve a correr sobre una base con datos, falla en vez de borrarlos.
-
 CREATE TABLE tarjetas (
   id         INT AUTO_INCREMENT PRIMARY KEY,
   uid_rfid   VARCHAR(20)  NOT NULL UNIQUE,
@@ -14,7 +10,7 @@ CREATE TABLE usuarios (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   nombre       VARCHAR(100) NOT NULL,
   correo       VARCHAR(120) NOT NULL UNIQUE,
-  password     VARCHAR(255) NOT NULL,  -- guardar hash, nunca texto plano
+  password     VARCHAR(255) NOT NULL,
   tipo_usuario ENUM('pasajero','administrador') NOT NULL DEFAULT 'pasajero',
   id_tarjeta   INT NULL,
   FOREIGN KEY (id_tarjeta) REFERENCES tarjetas(id)
@@ -38,14 +34,14 @@ CREATE TABLE dispositivos (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   id_unidad        INT NOT NULL,
   tipo_dispositivo ENUM('validador','termico') NOT NULL,
-  api_key_hash     CHAR(64) NOT NULL UNIQUE,  -- SHA-256 en hexadecimal
+  api_key_hash     CHAR(64) NOT NULL UNIQUE,
   ultima_conexion  DATETIME NULL,
   FOREIGN KEY (id_unidad) REFERENCES unidades(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE transacciones (
   id               INT AUTO_INCREMENT PRIMARY KEY,
-  id_tarjeta       INT NULL,  -- NULL cuando el UID no está registrado
+  id_tarjeta       INT NULL,
   id_dispositivo   INT NOT NULL,
   monto            DECIMAL(8,2) NOT NULL,
   resultado        ENUM('exitoso','saldo_insuficiente','tarjeta_invalida') NOT NULL,
@@ -77,17 +73,15 @@ CREATE TABLE sensores (
   INDEX (fecha_hora)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ------------------------------ Datos de prueba ------------------------------
+-- Datos de prueba
+
 INSERT INTO rutas (clave, nombre) VALUES ('R1', 'Ruta de prueba');
 INSERT INTO unidades (numero_economico, id_ruta, capacidad) VALUES ('101', 1, 40);
 
--- Las llaves son las mismas que API_KEY en validador.ino y nodo_termico.ino
 INSERT INTO dispositivos (id_unidad, tipo_dispositivo, api_key_hash) VALUES
   (1, 'validador', SHA2('validador-unidad-01', 256)),
   (1, 'termico',   SHA2('termico-unidad-01', 256));
 
--- Cambia los UID por los de tus tarjetas (el validador los imprime en el monitor serie)
 INSERT INTO tarjetas (uid_rfid, saldo, estado) VALUES
-  ('A1B2C3D4', 200.00, 'activa'),     -- cobro: LED verde
-  ('11223344',  40.00, 'activa'),     -- cobro: queda 25 < 2 viajes, LED amarillo
-  ('DEADBEEF', 100.00, 'bloqueada');  -- cobro: LED rojo
+  ('ADAE1A06', 100.00, 'activa'),     -- cobro normal
+  ('4163ED05', 100.00, 'bloqueada');  -- Tarjeta invalida
